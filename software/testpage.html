@@ -1,0 +1,223 @@
+
+<!DOCTYPE HTML>
+<html>
+ <head>
+  <title>WebSocket console</title>
+  <style>
+   textarea { display: block; }
+  </style>
+  <script>
+    onerror = function (msg) {
+      log(msg);
+    }
+    function log(msg) {
+      var logger = document.getElementById('log');
+      logger.appendChild(document.createTextNode(new Date() + '   ' + msg + '\n'));
+	  logger.scrollTop = logger.scrollHeight;
+	}
+    function logTime(msg) {
+      var logger = document.getElementById('time');
+      logger.appendChild(document.createTextNode(msg + '\n'));
+	  logger.scrollTop = logger.scrollHeight;
+	  if ('speechSynthesis' in window) {
+		  // Synthesis support. Make your web apps talk!
+		  var msg = new SpeechSynthesisUtterance(msg);
+		  msg.voice = speechSynthesis.getVoices().filter(function(voice) { return voice.name == 'Google UK English Female'; })[0];
+		    window.speechSynthesis.speak(msg);
+	  }
+	}
+    function status(msg) {
+      log(msg);
+      document.getElementById('status').textContent = msg;
+	  
+    }
+  </script>
+  <script>
+   var socket;
+   function connect() {
+     var url = document.getElementById('url').value;
+     var protocol = document.getElementById('protocol').value;
+     if (protocol == '')
+       socket = new WebSocket(url);
+     else
+       socket = new WebSocket(url, protocol);
+     status('Connecting to "' + url + '" with protocol "' + protocol + '"...');
+     socket.onopen = function (event) {
+       status('Connected to "' + socket.url + '".');
+     };
+     socket.onmessage = function (event) {
+       //log('RCVD: ' + event.data);
+         if(event.data.startsWith('a') ){ 
+             gotSample(event.data.substr(1, event.data.length));
+         } else if(event.data.startsWith('b') ){ 
+             gotThresh(event.data.substr(1, event.data.length));
+         } else if(event.data.startsWith('c') ){ 
+             logTime(event.data.substr(1, event.data.length));
+         } else {
+        	 log('RCVD: ' + event.data);
+         }
+     };
+     socket.onclose = function (event) {
+       status('Disconnected.');
+     };
+   }
+   function disconnect() {
+     if (socket) {
+       status('Disconnecting.');
+       socket.close();
+     } else {
+       log('Not connected.');
+     }
+   }
+   function send() {
+     if (socket) {
+       socket.send(document.getElementById('text').value);
+       log('SENT: ' + document.getElementById('text').value);
+     } else {
+       log('Not connected.');
+     }
+   }
+   function send100() {
+	     if (socket) {
+	       for (var i = 0; i < 100; i += 1) {
+	         socket.send('test'+ i);
+	         log('SENT: test' + i);
+	       }
+	     } else {
+	       log('Not connected.');
+	     }
+	   };
+   function sendCalLow() {
+	     if (socket) {
+	         socket.send('callo');
+	         log('SENT: cal lo');
+	     } else {
+	       log('Not connected.');
+	     }
+	   }
+   function sendCalThresh() {
+	     if (socket) {
+	         socket.send('calthresh');
+	         log('SENT: cal threshold');
+	     } else {
+	       log('Not connected.');
+	     }
+	   }
+	  function sendCalHi() {
+	     if (socket) {
+	         socket.send('calhi');
+	         log('SENT: cal hi');
+	     } else {
+	       log('Not connected.');
+	     }
+	   }
+	function sample() {
+	    if (socket) {
+	        socket.send('sample');
+	        log('SENT: sample');
+	    } else {
+	      log('Not connected.');
+	    }
+	}
+	function start() {
+	    if (socket) {
+	        socket.send('start');
+	        log('SENT: start');
+	    } else {
+	      log('Not connected.');
+	    }
+	}
+	function stop() {
+	    if (socket) {
+	        socket.send('stop');
+	        log('SENT: stop');
+	    } else {
+	      log('Not connected.');
+	    }
+	}	
+	function sessionStart() {
+	    if (socket) {
+	        socket.send('sessionStart');
+	        var node = document.getElementById('time')
+	        while (node.firstChild) {
+	        	node.removeChild(node.firstChild);
+			}
+	    }
+	}
+	function sessionEnd() {
+	    if (socket) {
+	        socket.send('sessionEnd');
+	    }
+	}
+	function gotSample(data) {
+		 document.getElementById('readingValue').textContent = data;
+		}
+	function gotThresh(data) {
+		 document.getElementById('threshValue').textContent = data;
+		}
+			   
+   function update() {
+     if (socket) {
+       document.getElementById('readyState').textContent = socket.readyState;
+       document.getElementById('bufferedAmount').textContent = socket.bufferedAmount;
+     } else {
+       document.getElementById('readyState').textContent = '-';
+       document.getElementById('bufferedAmount').textContent = '-';
+     }
+   }
+   setInterval(update, 10);
+  </script>
+ </head>
+ <body>
+  <p>Status: <span id="readyState">-</span> <span id="status">Idle</span></p>
+  <p>Buffer: <span id="bufferedAmount">-</span> bytes</p>
+  <p>
+   <label>WebSocket URL: <input id="url" type="url" size="80" value="ws://10.0.2.127:81"></label>
+   <label>Protocol: <input id="protocol" type="text" size="10" value=""></label>
+   <input type=button value="Connect" onclick="connect()">
+   <input type=button value="Disconnect" onclick="disconnect()">
+  </p>
+  <p>
+   <label>Send: <textarea id="text" type="text" rows="4" cols="80"></textarea></label>
+   <input type=button value="Send" onclick="send()">
+  </p>
+  <p>
+   <input type=button value="Spam 100 packets" onclick="send100()">
+  </p>
+    <p>
+   <input type=button value="low" onclick="sendCalLow()">
+   <input type=button value="cal threshold" onclick="sendCalThresh()">
+   <input type=button value="high" onclick="sendCalHi()">
+  </p>
+    <p>
+   <input type=button value="sample" onclick="sample()">
+  </p>
+    <p>
+   <input type=button value="start" onclick="start()">
+   <input type=button value="stop" onclick="stop()">
+  </p>    
+  <p>
+   <input type=button value="session start" onclick="sessionStart()">
+   <input type=button value="session end" onclick="sessionEnd()">
+  </p>
+      <p>reading value: <span id="readingValue">-</span></p>
+      <p>threshold value: <span id="threshValue">-</span></p>
+  
+
+  <table width="800" border="1">
+    <tr>
+      <td>
+        <pre>Log:</pre>
+        <textarea rows="25" cols="100" id="log"
+        style="resize: none;" data-role="none"></textarea>
+      </td>
+      <td>        
+      	<pre>Time:</pre>
+        <textarea rows="25" cols="100" id="time"
+        style="resize: none;" data-role="none"></textarea>
+	  </td>
+    </tr>
+ </table>
+
+ </body>
+</html>

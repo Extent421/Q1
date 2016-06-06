@@ -1,0 +1,133 @@
+
+<!DOCTYPE HTML>
+<html>
+ <head>
+  <title>Personal Lap Timer</title>
+  <style>
+   textarea { display: block; }
+  </style>
+  <script>
+
+    function logTime(msg) {
+      var logger = document.getElementById('time');
+      logger.appendChild(document.createTextNode(msg + '\n'));
+	  logger.scrollTop = logger.scrollHeight;
+	  if ('speechSynthesis' in window) {
+		  // Synthesis support. Make your web apps talk!
+		  var splitTime = msg.split(",");
+		  var readout = "lap "+ splitTime[0]+ ", "+ splitTime[2];
+		  var msg = new SpeechSynthesisUtterance(readout);
+		  msg.voice = speechSynthesis.getVoices().filter(function(voice) { return voice.name == 'Google UK English Female'; })[0];
+		    window.speechSynthesis.speak(msg);
+	  }
+	}
+    function status(msg) {
+      document.getElementById('status').textContent = msg;
+	  
+    }
+  </script>
+  <script>
+   var socket;
+   function connect() {
+     var host = location.hostname;
+     if (host == "") { host =  "10.0.2.127" };
+
+     socket = new WebSocket('ws://'+host+':81/');
+     status('Connecting to "' + host + '"...');
+     socket.onopen = function (event) {
+       status('Connected to "' + socket.url + '".');
+     };
+     socket.onmessage = function (event) {
+       //log('RCVD: ' + event.data);
+         if(event.data.startsWith('a') ){ 
+             gotSample(event.data.substr(1, event.data.length));
+         } else if(event.data.startsWith('b') ){ 
+             gotThresh(event.data.substr(1, event.data.length));
+         } else if(event.data.startsWith('c') ){ 
+             logTime(event.data.substr(1, event.data.length));
+         }
+     };
+     socket.onclose = function (event) {
+       status('Disconnected.');
+     };
+   }
+   function disconnect() {
+     if (socket) {
+       status('Disconnecting.');
+       socket.close();
+     }
+   }
+   function sendCalLow() {
+	     if (socket) {
+	         socket.send('callo');
+	     }
+	   }
+   function sendCalThresh() {
+	     if (socket) {
+	         socket.send('calthresh');
+	     }
+	   }
+	  function sendCalHi() {
+	     if (socket) {
+	         socket.send('calhi');
+	     } 
+	   }
+	function sessionStart() {
+	    if (socket) {
+	        socket.send('sessionStart');
+	        var node = document.getElementById('time')
+	        while (node.firstChild) {
+	        	node.removeChild(node.firstChild);
+			}
+	    }
+	}
+	function sessionEnd() {
+	    if (socket) {
+	        socket.send('sessionEnd');
+	    }
+	}
+	function mailResult() {
+		window.open('mailto:extent421@gmail.com?subject=Times&body='+document.getElementById('time').value);
+	}
+	
+	function gotSample(data) {
+		 document.getElementById('readingValue').textContent = data;
+		}
+	function gotThresh(data) {
+		 document.getElementById('threshValue').textContent = data;
+		}
+			   
+   function update() {
+     if (socket) {
+       document.getElementById('readyState').textContent = socket.readyState;
+     } else {
+       document.getElementById('readyState').textContent = '-';
+     }
+   }
+   setInterval(update, 10);
+  </script>
+ </head>
+ <body>
+   <p>Status: <span id="readyState">-</span> <span id="status">Idle</span></p>
+  <p>
+   <input type=button value="Connect" onclick="connect()">
+   <input type=button value="Disconnect" onclick="disconnect()">
+   <input type=button value="mail result" onclick="mailResult()">
+  </p>
+    <p>
+   <input type=button value="low" onclick="sendCalLow()">
+   <input type=button value="cal threshold" onclick="sendCalThresh()">
+   <input type=button value="high" onclick="sendCalHi()">
+  </p>
+  <p>
+   <input type=button value="session start" onclick="sessionStart()">
+   <input type=button value="session end" onclick="sessionEnd()">
+  </p>
+      <p>threshold value: <span id="threshValue">-</span></p>
+	
+	 <textarea rows="25" cols="100" id="time"
+	 style="resize: none;" data-role="none"></textarea>
+
+
+ </body>
+</html>

@@ -1,6 +1,10 @@
 #include "Q1.h"
 #include "pins.h"
 
+extern "C" {
+#include "driver/spi.h"
+}
+
 #include <ESP8266WiFi.h>
 #include <ESP8266WebServer.h>
 #include <FS.h>
@@ -50,26 +54,31 @@ unsigned long timerZero = 0;
 int lapCount = 0;
 unsigned long lastLapTime = 0;
 
+bool blinkFlag = false;
 
 void setup() {
   Serial.begin(115200);
   delay(100);
  
   pinMode(BLINK_PIN, OUTPUT);
-  digitalWrite(BLINK_PIN, LOW);
+  digitalWrite(BLINK_PIN, HIGH);
+  pinMode(BEEP_PIN, OUTPUT);
+  digitalWrite(BEEP_PIN, LOW);
 
-  
+  pinMode(SETTINGS_RESET_PIN, INPUT_PULLUP);
+
+  if ( !digitalRead( SETTINGS_RESET_PIN) ) {
+	  Serial.println();
+	  Serial.println("settings reset requested");
+  }
   WiFi.mode(WIFI_AP_STA);
 	uint8_t mac[WL_MAC_ADDR_LENGTH];
 	WiFi.softAPmacAddress(mac);
 	char buffer[20];
-	sprintf(buffer, "test - %X%X",  mac[WL_MAC_ADDR_LENGTH-1],  mac[WL_MAC_ADDR_LENGTH-2] );
+	sprintf(buffer, "Q1 node - %X%X",  mac[WL_MAC_ADDR_LENGTH-2],  mac[WL_MAC_ADDR_LENGTH-1] );
   WiFi.softAPConfig(apIP, apIP, netMsk);
   WiFi.softAP(buffer, softAP_password);
-  Serial.print("Starting softAP ");
-  Serial.print(buffer);
-  Serial.print(" ");
-  Serial.println(softAP_password);
+  Serial.println("Starting softAP ");
 
   Serial.print("Connecting to ");
   Serial.println(ssid);
@@ -127,6 +136,10 @@ void setup() {
 
   server.begin();
 
+
+  spi_init(HSPI);
+  // RX datasheet says to use leading clock, but with hardware SPI it only seems to work with trailing
+  spi_mode(HSPI, 1, 0); // trailing clock, low idle
 }
 
 void loop() {
@@ -135,6 +148,10 @@ void loop() {
     webSocket.loop();
     server.handleClient();
     lapTimerLoop();
+    if (blinkFlag){
+    	blinkFlag=false;
+    	doBlink();
+    }
 }
 
 String getContentType(String filename){
@@ -254,34 +271,37 @@ void lapTimerLoop(){
     			}
     		}
     		
-    	unsigned long offsetTime = getLapTime();
-		digitalWrite(BLINK_PIN, HIGH);
-		delay(250);
-		digitalWrite(BLINK_PIN, LOW);
+    	if (maxLength > 15) {	// if the pulse time was too short just throw it away
+			unsigned long offsetTime = getLapTime();
+			digitalWrite(BLINK_PIN, LOW);
+			digitalWrite(BEEP_PIN, HIGH);
+			delay(250);
+			digitalWrite(BLINK_PIN, HIGH);
+			digitalWrite(BEEP_PIN, LOW);
 
-		unsigned long lapTime = (mergedPulses[maxIndex].end + mergedPulses[maxIndex].start ) / 2;
-		int offset = offsetTime - lapTime ;
-		char buffer[128];
-		char timecodeStr[16];
-		char lapTimeStr[16];
-		dtostrf(lapTime/1000.0, 4, 2, timecodeStr);
-		dtostrf((lapTime-lastLapTime)/1000.0, 4, 2, lapTimeStr);
+			unsigned long lapTime = (mergedPulses[maxIndex].end + mergedPulses[maxIndex].start ) / 2;
+			int offset = offsetTime - lapTime ;
+			char buffer[128];
+			char timecodeStr[16];
+			char lapTimeStr[16];
+			dtostrf(lapTime/1000.0, 4, 2, timecodeStr);
+			dtostrf((lapTime-lastLapTime)/1000.0, 4, 2, lapTimeStr);
 
-		sprintf(buffer, "cL%i,%s,%s,%i,%i", lapCount, timecodeStr, lapTimeStr, maxLength, offset );
-		webSocket.sendTXT(0, buffer);
+			sprintf(buffer, "cL%i,%s,%s,%i,%i", lapCount, timecodeStr, lapTimeStr, maxLength, offset );
+			webSocket.broadcastTXT(buffer);
 
-		lastLapTime = lapTime;
-		lapCount++;
-
+			lastLapTime = lapTime;
+			lapCount++;
+    	}
 		/*
 		char buffer[128];
 		sprintf(buffer, "clap %i of %i(%i), %i", maxIndex, mergedIndex, recordedPulsesIndex, maxLength/1000 );
-		webSocket.sendTXT(0, buffer);
+		webSocket.broadcastTXT(buffer);
 		for (int i = 0; i< mergedIndex;i++){
 			delay(0);
 			sprintf(buffer, "c%i, %i", i, (mergedPulses[i].end - mergedPulses[i].start ) /1000 );
 			
-			webSocket.sendTXT(0, buffer);
+			webSocket.broadcastTXT(buffer);
 		}
 		*/
 
@@ -385,15 +405,23 @@ void startSession(){
 	lastLapTime = 0;
 	running = true;
 
-	delay(0);
-	digitalWrite(BLINK_PIN, HIGH);
-	delay(250);
-	digitalWrite(BLINK_PIN, LOW);
-	delay(250);
-	digitalWrite(BLINK_PIN, HIGH);
-	delay(250);
-	digitalWrite(BLINK_PIN, LOW);
+	blinkFlag = true;
 
+}
+
+void doBlink(){
+	digitalWrite(BLINK_PIN, LOW);
+	digitalWrite(BEEP_PIN, HIGH);
+	delay(250);
+	digitalWrite(BLINK_PIN, HIGH);
+	digitalWrite(BEEP_PIN, LOW);
+	delay(250);
+	digitalWrite(BLINK_PIN, LOW);
+	digitalWrite(BEEP_PIN, HIGH);
+
+	delay(250);
+	digitalWrite(BLINK_PIN, HIGH);
+	digitalWrite(BEEP_PIN, LOW);
 
 }
 
@@ -454,6 +482,11 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t lenght
 				startSession();
 			}else if (strcmp((char*)payload, "sessionEnd")  == 0) {
 				endSession();
+			}else if (strncmp((char*)payload, "sch", 3)  == 0) {
+				char *payloadData = (char*)payload + 3; //get the embedded asci channel
+				uint16_t channel = 0;
+				channel = atoi(payloadData);
+				setVTXChannel(channel);
 			} else {
 				webSocket.sendTXT(0, "pong");
 			}
@@ -472,5 +505,64 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t lenght
             // webSocket.sendBIN(num, payload, lenght);
             break;
     }
+
+}
+
+
+void setVTXChannel(uint16_t channel)
+{
+	if (channel > 5950) channel = 5950;
+	if (channel < 5630) channel = 5630;
+	uint32_t registerValue = 0;
+	registerValue = getChannelValueFromFreq(channel);
+	vtxWrite(0x1, registerValue);
+}
+
+uint32_t getChannelValueFromFreq(uint16_t frequency){
+	//get the register value for the supplied frequency (in mhz)
+	//frequency=2*(N*32+A)
+	uint16_t nTerm = 0;
+	uint16_t aTerm = 0;
+	uint32_t registerValue = 0;
+
+	nTerm = ((frequency-479)/2)/32;
+	aTerm = ((frequency-479)/2)-(nTerm*32);
+
+	registerValue = (nTerm<<7) | (aTerm);
+	return(registerValue);
+}
+
+void vtxWrite(uint8_t address, uint32_t data){
+	// pack a buffer to be written to the vtx
+	// VTX expects LS bit first, so we assemble the buffer in reverse
+	// so when the SPI hardware sends it MS bit first it will come in the right order
+	uint32_t sendBuffer = 0;
+	uint32_t temp = 0;
+
+	// assemble register address
+	temp = address;
+	for (uint8_t i = 0; i < 4; i++)
+	{
+		sendBuffer <<= 1;
+		sendBuffer = sendBuffer| (temp & 0x1);
+		temp >>= 1;
+	}
+
+	// set write bit (we're always in write mode)
+	sendBuffer <<= 1;
+	sendBuffer = sendBuffer| 0x1;
+
+	// assemble register data
+	temp = data;
+	for (uint8_t i = 0; i < 20; i++)
+	{
+		sendBuffer <<= 1;
+		sendBuffer = sendBuffer| (temp & 0x1);
+		temp >>= 1;
+	}
+
+	// send command to VTX
+
+	spi_txd(HSPI, 25, sendBuffer);
 
 }

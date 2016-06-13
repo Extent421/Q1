@@ -23,7 +23,7 @@
 		  // Synthesis support. Make your web apps talk!
 		  var msg = new SpeechSynthesisUtterance(msg);
 		  msg.voice = speechSynthesis.getVoices().filter(function(voice) { return voice.name == 'Google UK English Female'; })[0];
-		    window.speechSynthesis.speak(msg);
+		  //window.speechSynthesis.speak(msg);
 	  }
 	}
     function status(msg) {
@@ -135,6 +135,23 @@
 	      log('Not connected.');
 	    }
 	}	
+	
+	function sendC1() {
+	    if (socket) {
+	        socket.send('sch5865');
+	        log('SENT: sch');
+	    } else {
+	      log('Not connected.');
+	    }
+	}		
+	function sendA1() {
+	    if (socket) {
+	        socket.send('sch 5865');
+	        log('SENT: sch space');
+	    } else {
+	      log('Not connected.');
+	    }
+	}	
 	function sessionStart() {
 	    if (socket) {
 	        socket.send('sessionStart');
@@ -172,7 +189,7 @@
   <p>Status: <span id="readyState">-</span> <span id="status">Idle</span></p>
   <p>Buffer: <span id="bufferedAmount">-</span> bytes</p>
   <p>
-   <label>WebSocket URL: <input id="url" type="url" size="80" value="ws://10.0.2.127:81"></label>
+   <label>WebSocket URL: <input id="url" type="url" size="80" value="ws://10.0.2.128:81"></label>
    <label>Protocol: <input id="protocol" type="text" size="10" value=""></label>
    <input type=button value="Connect" onclick="connect()">
    <input type=button value="Disconnect" onclick="disconnect()">
@@ -188,6 +205,10 @@
    <input type=button value="low" onclick="sendCalLow()">
    <input type=button value="cal threshold" onclick="sendCalThresh()">
    <input type=button value="high" onclick="sendCalHi()">
+  </p>
+    <p>
+   <input type=button value="C1" onclick="sendC1()">
+   <input type=button value="A1" onclick="sendA1()">
   </p>
     <p>
    <input type=button value="sample" onclick="sample()">

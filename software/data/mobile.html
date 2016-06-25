@@ -2,326 +2,101 @@
 <html>
  <head>
   <title>Personal Lap Timer</title>
-  <style>
-  
-  body {
-	font-size: 24px;	  
-  }
-  
-  hr {
-    -webkit-margin-before: 5px;
-    -webkit-margin-after: 10px;
-  }
-  button {
-	font-size: 20px;
-	border-radius: 6px;	  
-	box-shadow: 0 1px 3px 0 rgba(0,0,0,0.2);
-	}
-	
-textarea { display: block; }
-
-  #settingsbutton {
-	float: right;
-}
-  #mailResultsButton {
-	float: right;
-}
-  #settingsPage {
-	top: 0px;
-	z-index: 10;
-	position: relative;
-	width: 100%;
-}
-  #settingsPage {
-	top: 0px; 
-	z-index: 0; 
-	position: relative;
-	width: 100%;
-}
-
-#lapContainer {
-
-  }
-  
-#lapScroll {
-	height: 300px;
-    overflow: auto;
-}
-
-#lapTimes {
-	border-spacing: 0px;
-	width:100%;
-}
-
-#lapTimes td {
-    border-bottom: 1px solid #ddd;
-}
-#lapTimes td:first-child {
-	width: 40px;
-}
-#lapTimes tr {
-	background-color: #FFF;
-	font-weight: bold;
-}
-#lapTimes .pace{
-	background-color: #F80;
-	color: #FFF;
-	text-shadow:
-		-1px -1px 0 #000,  
-		1px -1px 0 #000,
-		-1px 1px 0 #000,
-		1px 1px 0 #000;
-	font-weight: bolder;
-}
-#lapTimes .best {
-	background-color: #D50000;
-	color: #FFF;
-	text-shadow:
-		-1px -1px 0 #000,  
-		1px -1px 0 #000,
-		-1px 1px 0 #000,
-		1px 1px 0 #000;
-	font-weight: bolder;
-}
-
-  </style>
-<script>
-var socket;
-var rawLog = "lap, timecode, laptime, trigger length, trigger offset\n";
-var overallBest = 999;
-var sessionBest = 999;
-var sessionNumber = 1;
-function logTime(msg) {
-	rawLog = rawLog + msg + '\n';
-
-	//var logger = document.getElementById('time');
-	//logger.appendChild(document.createTextNode(msg + '\n'));
-	//logger.scrollTop = logger.scrollHeight;
-	var splitTime = msg.split(",");
-	var overallFlag = false;
-	var sessionFlag = false;
-	thisTime = parseFloat(splitTime[2]);
-	thisLap = parseInt(splitTime[0].match(/(\d+)$/)[0], 10);
-	
-		if(thisLap > 0) {
-			if (thisTime < overallBest) {
-				overallFlag = true;
-				overallBest = thisTime;
-			};
-			if (thisTime < sessionBest) {
-				sessionFlag = true;
-				sessionBest = thisTime;
-			};
-		}
-
-	var bestText = "";
-	if (overallFlag) {
-		bestText = ", overall best,";
-	} else if (sessionFlag) {
-		bestText = ", session best,";
-	}
-
-	var lapTable = document.getElementById('lapTimes');
-	var newRow = lapTable.insertRow(-1);
-	var lapCell = newRow.insertCell(0);
-	var timeCell = newRow.insertCell(1);
-	lapCell.innerHTML = thisLap;
-	timeCell.innerHTML = thisTime;
-	document.getElementById('lapScroll').scrollTop = document.getElementById('lapScroll').scrollHeight;
-
-	refreshTimesTable();
-
-	if ('speechSynthesis' in window) {
-		// Synthesis support. Make your web apps talk!
-		var readout = "lap "+ splitTime[0]+ bestText + ", "+ splitTime[2];
-		var msg = new SpeechSynthesisUtterance(readout);
-		msg.voice = speechSynthesis.getVoices().filter(function(voice) { return voice.name == localStorage.getItem("defaultVoice"); })[0];
-		window.speechSynthesis.speak(msg);
-	}
-}
-function status(msg) {
-      document.getElementById('status').textContent = msg;
-}
-
-   function connect() {
-     var host = location.hostname;
-     if (host == "") { host =  "10.0.2.128" };
-
-     socket = new WebSocket('ws://'+host+':81/');
-     status('Connecting');
-     socket.onopen = function (event) {
-       status('Connected');
-	   document.getElementById('connectButton').innerHTML = "Disconnect";
-	   document.getElementById('connectButton').onclick = disconnect;
-     };
-     socket.onmessage = function (event) {
-       //log('RCVD: ' + event.data);
-         if(event.data.startsWith('a') ){ 
-             gotSample(event.data.substr(1, event.data.length));
-         } else if(event.data.startsWith('c') ){ 
-             logTime(event.data.substr(1, event.data.length));
-         }
-     };
-     socket.onclose = function (event) {
-       status('Disconnected.');
-	   document.getElementById('connectButton').innerHTML = "Connect";
-	   document.getElementById('connectButton').onclick = connect;
-
-     };
-   }
-   function toggleSettings() {
-		var div = document.getElementById("settingsPage");
-		var display = div.style.display == "none" ? "block" : "none";
-		div.style.display = display;
-		div = document.getElementById("mainPage");
-		display = display == "none" ? "block" : "none";
-		div.style.display = display;
-
-   }
-   function pageLoaded() {
-		document.getElementById("emailAddress").value = localStorage.getItem("emailAddress");
-		
-
-   }
-  function emailChange() {
-		localStorage.setItem("emailAddress",document.getElementById("emailAddress").value);
-   } 
-  function changeVoiceOption() {
-		localStorage.setItem("defaultVoice",document.getElementById("voiceOption").value);
-   } 
-   function disconnect() {
-     if (socket) {
-       status('Disconnecting.');
-       socket.close();
-     }
-   }   
-   function sendCalLow() {
-	     if (socket) {
-	         socket.send('callo');
-	     }
-	   }
-   function sendCalThresh() {
-	     if (socket) {
-	         socket.send('calthresh');
-	     }
-	   }
-  function sendCalHi() {
-	 if (socket) {
-		 socket.send('calhi');
-	 } 
-   }
-	function sessionStart() {
-	    if (socket) {
-	        socket.send('sessionStart');
-			var node = document.getElementById('lapTimes');
-	        while (node.firstChild) {
-	        	node.removeChild(node.firstChild);
-			}
-			
-			rawLog = "lap, timecode, laptime, trigger length, trigger offset\n";
-			sessionBest = 999;
-	    }
-	}
-	function sessionEnd() {
-	    if (socket) {
-	        socket.send('sessionEnd');
-	    }
-	}
-	function setChannel() {
-	    if (socket) {
-	    	socket.send('sch'+ document.getElementById("channelNumber").value );
-	    }
-	}
-	function mailResult() {
-		window.open('mailto:'+document.getElementById("emailAddress").value+'?subject=Times&body='+encodeURIComponent(rawLog));
-	}
-	
-	function gotSample(data) {
-		 //document.getElementById('readingValue').textContent = data;
-	}
-   function update() {
-     if (socket) {
-       document.getElementById('readyState').textContent = socket.readyState;
-     } else {
-       document.getElementById('readyState').textContent = '-';
-     }
-   }
-   function refreshTimesTable() {
-	   var table = document.getElementById('lapTimes');
-	   for (var i = 0, row; row = table.rows[i]; i++) {
-		   //iterate through rows
-		   //rows would be accessed using the "row" variable assigned in the for loop
-			var timeValue = parseInt(row.cells[1].innerHTML) ;
-			if (parseInt(sessionBest) == timeValue){
-				row.className = "best";
-			} else if (parseInt(sessionBest)+1 == timeValue) {
-				row.className = "pace";
-			} else {
-				row.className = "";
-			}
-			   
-		}
-   }
-   
-   
-window.speechSynthesis.onvoiceschanged = function() {
-		var voices = speechSynthesis.getVoices();
-		voices.forEach(function (voice, i) {
-			var option = document.createElement('option');
-			option.value = voice.name;
-			option.innerHTML = voice.name;
-			document.getElementById("voiceOption").appendChild(option);
-		});
-		document.getElementById("voiceOption").value = localStorage.getItem("defaultVoice");
-}; 
-window.onbeforeunload = function() {
-    return "Reloading will erase current session.";
-};  
-   setInterval(update, 10);
-  </script>
+  <link rel="stylesheet" type="text/css" href="mobile.css">
+  <script src="q1Funcs.js"></script>
   <meta name="viewport" content="width=device-width, user-scalable=no" />
  </head>
  <body  onload="pageLoaded()">
-<header>
-        <button onclick="connect()" id="connectButton">Connect</button>
+<ul class="tabrow">
+   <li onclick="openTab(event, 'mainPage')" class="selectedTab tabLink leftTab" >Main</li>
+   <span class="rightTab">
+   <li onclick="openTab(event, 'statusPage')" class="tabLink"  >Status</li>
+   <li onclick="openTab(event, 'settingsPage')" class="tabLink" >Settings</li>
+   </span>
+    &nbsp;
+</ul>
+
+
+	<div id="mainPage" class="tabPage" style="display: block;">
+	        <button onclick="connect()" id="connectButton">Connect</button>
         Status: <span id="readyState">-</span> <span id="status">Idle</span>  
-        <button onclick="toggleSettings()" id="settingsbutton">Settings</button>
-</header>
-	<hr />
-    <div id="settingsPage" style="display: none;">
+	
+		<button onclick="mailResult()" id="mailResultsButton">mail result</button>
+		<br />
+		<button onclick="sessionStart()">session start</button>
+		<button onclick="sessionEnd()">session end</button>
+		   
+		<div id="lapContainer">
+			<div id="lapScroll">
+		        <table id="lapTimes">
+		        </table>
+			</div>
+		</div>
+
+    </div>
+    
+
+	<div id="statusPage" class="tabPage" style="display: none;">
+	
+	reading value: <span id="readingValue">-</span>
+	<br />
+	Session: <span id="sessionValue">-</span>
+	<br />
+	WiFi Status: <span id="wifiStatusValue">-</span>
+	<br />
+	WiFi IP: <span id="wifiIPValue">-</span>
+	<br />
+	Low calibrate value: <span id="loCalibrateValue">-</span>
+	<br />
+	Threshold calibrate value: <span id="midCalibrateValue">-</span>
+	<br />
+	High calibrate value: <span id="hiCalibrateValue">-</span>
+	
+	</div>
+    
+    
+    <div id="settingsPage" class="tabPage" style="display: none;">
 	 channel number (in mhz): 
          <textarea rows="1"  id="channelNumber"
-         style="resize: none;" data-role="none";>5865</textarea> 
-		<button onclick="setChannel()">set channel</button>
-         
+         style="resize: none;" data-role="none"; onchange ="setChannel()";></textarea>         
+	<br />
+	 Minimum trigger length: 
+         <textarea rows="1"  id="minPulse"
+         style="resize: none;" data-role="none"; onchange ="minPulseChange()";></textarea> 
 	<br />
 	 Session number: 
          <textarea rows="1"  id="sessionNumber"
-         style="resize: none;" data-role="none"; oninput ="sessionChange()";></textarea> 
+         style="resize: none;" data-role="none"; onchange ="sessionChange()";></textarea> 
 	<br />
-	 Email address: 
-         <textarea rows="1" cols="40" id="emailAddress"
-         style="resize: none;" data-role="none"; oninput ="emailChange()";></textarea> 
+	 Station SSID: 
+         <textarea rows="1"  id="stationSSID"
+         style="resize: none;" data-role="none"; onchange ="StationSSIDChange()";></textarea> 
 	<br />
-       <input type=button value="low" onclick="sendCalLow()">
-       <input type=button value="cal threshold" onclick="sendCalThresh()">
-       <input type=button value="high" onclick="sendCalHi()">
+	 Station Password: 
+         <textarea rows="1"  id="stationPassword"
+         style="resize: none;" data-role="none"; onchange ="StationPasswordChange()";></textarea> 
 	<br />
-            <label >Voice</label>
-            <select id="voiceOption" onchange="changeVoiceOption()"></select>
+	 AP SSID: 
+	<textarea rows="1"  id="APSSID"
+	style="resize: none;" data-role="none"; onchange ="APSSIDChange()";></textarea> 
+	<br />
+	AP Password: 
+    <textarea rows="1"  id="APPassword"
+    style="resize: none;" data-role="none"; onchange ="APPasswordChange()";></textarea> 
+	<br />
+	<input type="checkbox" id="APMode"; onchange ="APModeChange()">Autoconnect to AP<br>
+	<br />
 
-    </div>
-	<div id="mainPage" style="display: block;">
-               <button onclick="mailResult()" id="mailResultsButton">mail result</button>
-                <button onclick="sessionStart()">session start</button>
-                <button onclick="sessionEnd()">session end</button>
-     
-        <div id="lapContainer">
-        <div id="lapScroll">
-                <table id="lapTimes">
-                </table>
-		</div>
-        </div>
+	 Email address: 
+     <textarea rows="1" cols="40" id="emailAddress"
+     style="resize: none;" data-role="none"; oninput ="emailChange()";></textarea> 
+	<br />
+    <input type=button value="low" onclick="sendCalLow()">
+    <input type=button value="cal threshold" onclick="sendCalThresh()">
+    <input type=button value="high" onclick="sendCalHi()">
+	<br />
+	<label >Voice</label>
+	<select id="voiceOption" onchange="changeVoiceOption()"></select>
 
     </div>
  </body>

@@ -16,19 +16,24 @@ extern "C" {
 #include <ArduinoOTA.h>
 #include <ESP8266mDNS.h>
 #include <DNSServer.h>
+#include <EEPROM.h>
+
 
 Ticker refresh;
 WebSocketsServer webSocket = WebSocketsServer(81);
 ESP8266WebServer server(80);
 File fsUploadFile;
 
-const char* ssid     = "";
-const char* password = "";
+uint8_t APConnectMode = 0;
+
+char AP_SSID[34]     = "";
+char AP_password[65] = "";
 
 /* Soft AP network parameters */
 IPAddress apIP(192, 168, 4, 1);
 IPAddress netMsk(255, 255, 255, 0);
-const char *softAP_password = "12345678";
+char station_password[65] = "";
+char station_SSID[33] = "";
 
 // DNS server
 const byte DNS_PORT = 53;
@@ -36,110 +41,132 @@ DNSServer dnsServer;
 
 int readValue = 0;
 
-int minCal = 0;
-int threshCal = 1023;
-int maxCal = 1023;
+uint16_t minCal = 0;
+uint16_t threshCal = 1023;
+uint16_t maxCal = 1023;
+uint16_t rxFrequency = 0;
+uint8_t minPulse = 0;
+
 
 pulseData recordedPulses[100];
 int recordedPulsesIndex = 0;
 
-bool running = false;
+bool samplerRunning = false;
+bool sessionRunning = false;
 bool pulseActive = false;
 unsigned long pulseStart = 0;
 unsigned long pulseEnd = 0;
 unsigned long pulseEndLast = 0;
 unsigned long lastSampleTime =0;
 
+unsigned long connectingTime = 0;
+
 unsigned long timerZero = 0;
 int lapCount = 0;
 unsigned long lastLapTime = 0;
 
 bool blinkFlag = false;
+bool sendSampleFlag = false;
 
 void setup() {
-  Serial.begin(115200);
-  delay(100);
- 
-  pinMode(BLINK_PIN, OUTPUT);
-  digitalWrite(BLINK_PIN, HIGH);
-  pinMode(BEEP_PIN, OUTPUT);
-  digitalWrite(BEEP_PIN, LOW);
+	Serial.begin(115200);
+	delay(100);
 
-  pinMode(SETTINGS_RESET_PIN, INPUT_PULLUP);
+	pinMode(BLINK_PIN, OUTPUT);
+	digitalWrite(BLINK_PIN, HIGH);
+	pinMode(BEEP_PIN, OUTPUT);
+	digitalWrite(BEEP_PIN, LOW);
 
-  if ( !digitalRead( SETTINGS_RESET_PIN) ) {
-	  Serial.println();
-	  Serial.println("settings reset requested");
-  }
-  WiFi.mode(WIFI_AP_STA);
-	uint8_t mac[WL_MAC_ADDR_LENGTH];
-	WiFi.softAPmacAddress(mac);
-	char buffer[20];
-	sprintf(buffer, "Q1 node - %X%X",  mac[WL_MAC_ADDR_LENGTH-2],  mac[WL_MAC_ADDR_LENGTH-1] );
-  WiFi.softAPConfig(apIP, apIP, netMsk);
-  WiFi.softAP(buffer, softAP_password);
-  Serial.println("Starting softAP ");
+	pinMode(SETTINGS_RESET_PIN, INPUT_PULLUP);
 
-  Serial.print("Connecting to ");
-  Serial.println(ssid);
-  WiFi.begin(ssid, password);
-  
-  /* Setup the DNS server redirecting all the domains to the apIP */
-  dnsServer.setErrorReplyCode(DNSReplyCode::NoError);
-  dnsServer.start(DNS_PORT, "*", apIP);
+	spi_init(HSPI);
+	// RX datasheet says to use leading clock, but with hardware SPI it only seems to work with trailing
+	spi_mode(HSPI, 1, 0); // trailing clock, low idle
 
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
- 
+	SPIFFS.begin();
 
-  ArduinoOTA.setHostname("");
-  ArduinoOTA.onStart([]() {
-    Serial.println("Start");
-  });
-  ArduinoOTA.onEnd([]() {
-    Serial.println("\nEnd");
-  });
-  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
-    Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
-  });
-  ArduinoOTA.onError([](ota_error_t error) {
-    Serial.printf("Error[%u]: ", error);
-    if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
-    else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
-    else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
-    else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
-    else if (error == OTA_END_ERROR) Serial.println("End Failed");
-  });
+	if ( !digitalRead( SETTINGS_RESET_PIN) ) {
+		Serial.println();
+		Serial.println("settings reset requested");
+		resetSettings();
+	}
+
+	// power down parts of the RX we're not using
+	uint32_t registerValue = 0;
+	registerValue = PD_VCLAMP | PD_VAMP | PD_IFAF | PD_DIV4 | PD_5GVCO | PD_AU6M | PD_6M | PD_AU6M5 | PD_6M5 | PD_REG1D8 | PD_DIV80 | PD_PLL1D8;
+	vtxWrite(0x0A, registerValue);
+
+	loadSettings();
 
 
-  ArduinoOTA.begin();
+	WiFi.mode(WIFI_AP_STA);
 
-  Serial.println("");
-  Serial.println("WiFi connected");  
-  Serial.println("IP address: ");
-  Serial.println(WiFi.localIP());
-  
-  webSocket.begin();
-  webSocket.onEvent(webSocketEvent);
-  
-  SPIFFS.begin();
+	/* Setup the DNS server redirecting all the domains to the apIP */
+	Serial.println("Starting DNS ");
+	dnsServer.setErrorReplyCode(DNSReplyCode::NoError);
+	dnsServer.start(DNS_PORT, "*", apIP);
 
-  //SERVER INIT
-  //called when the url is not defined here
-  //use it to load content from SPIFFS
-  server.onNotFound([](){
-    if(!handleFileRead(server.uri()))
-      server.send(404, "text/plain", "FileNotFound");
-  });
+	Serial.println("Starting softAP ");
+	WiFi.softAPConfig(apIP, apIP, netMsk);
+	WiFi.softAP(station_SSID, station_password);
 
-  server.begin();
+	if (APConnectMode == AP_AUTOCONNECT){
+		Serial.print("Connecting to ");
+		Serial.println(AP_SSID);
+		WiFi.begin(AP_SSID, AP_password);
+		connectingTime = millis();
+		while (WiFi.status() != WL_CONNECTED) {
+			if ((millis() - connectingTime) > 10000) {
+				WiFi.disconnect();
+				break;
+			}
+			delay(500);
+			Serial.print(".");
+		}
+
+		if (WiFi.status() == WL_CONNECTED) {
+			Serial.println("");
+			Serial.println("WiFi connected");
+			Serial.println("IP address: ");
+			Serial.println(WiFi.localIP());
+		}
+	} else {
+		WiFi.disconnect();
+	}
+
+	ArduinoOTA.setHostname("");
+	ArduinoOTA.onStart([]() {
+		Serial.println("Start");
+	});
+	ArduinoOTA.onEnd([]() {
+		Serial.println("\nEnd");
+	});
+	ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+		Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
+	});
+	ArduinoOTA.onError([](ota_error_t error) {
+	Serial.printf("Error[%u]: ", error);
+	if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
+		else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
+		else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
+		else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
+		else if (error == OTA_END_ERROR) Serial.println("End Failed");
+	});
+	ArduinoOTA.begin();
+
+	webSocket.begin();
+	webSocket.onEvent(webSocketEvent);
+
+	//SERVER INIT
+	//called when the url is not defined here
+	//use it to load content from SPIFFS
+	server.onNotFound([](){
+	if(!handleFileRead(server.uri()))
+		server.send(404, "text/plain", "FileNotFound");
+	});
+	server.begin();
 
 
-  spi_init(HSPI);
-  // RX datasheet says to use leading clock, but with hardware SPI it only seems to work with trailing
-  spi_mode(HSPI, 1, 0); // trailing clock, low idle
 }
 
 void loop() {
@@ -152,6 +179,151 @@ void loop() {
     	blinkFlag=false;
     	doBlink();
     }
+    if (sendSampleFlag){
+    	sendSampleFlag=false;
+    	char buffer[7];
+    	sprintf(buffer, "a%i", readValue);
+    	webSocket.broadcastTXT(buffer);
+    }
+}
+
+void resetSettings(){
+
+	uint8_t mac[WL_MAC_ADDR_LENGTH];
+	WiFi.softAPmacAddress(mac);
+	char buffer[20];
+	sprintf(buffer, "Q1 node - %X%X",  mac[WL_MAC_ADDR_LENGTH-2],  mac[WL_MAC_ADDR_LENGTH-1] );
+
+	EEPROM.begin(256);
+	for (int i = 0; i < 256; i++)  EEPROM.write(i, 0);
+	EEPROM.put(0, "Q1Settings");
+	EEPROM.put(10, 0); // settings version number
+	EEPROM.put(11, AP_CONNECT_DISABLED); // ap connect mode
+	EEPROM.put(12, 5704); // rx frequency
+	EEPROM.put(14, 600); // low calibrate
+	EEPROM.put(16, 1024); // mid calibrate
+	EEPROM.put(18, 1024); // high calibrate
+	EEPROM.put(20, buffer); // station SSID
+	EEPROM.put(52, "12345678"); // station password
+	EEPROM.put(116, ""); // ap SSID
+	EEPROM.put(148, ""); // ap password
+	EEPROM.put(212, 15); // ap password
+
+	EEPROM.end();
+}
+
+void saveSettings(){
+
+	EEPROM.begin(256);
+
+	EEPROM.put(11, APConnectMode); // ap connect mode
+	EEPROM.put(12, rxFrequency); // rx frequency
+	EEPROM.put(14, minCal); // low calibrate
+	EEPROM.put(16, threshCal); // mid calibrate
+	EEPROM.put(18, maxCal); // high calibrate
+	EEPROM.put(20, station_SSID); // station SSID
+	EEPROM.put(52, station_password); // station password
+	EEPROM.put(116, AP_SSID); // ap SSID
+	EEPROM.put(148, AP_password); // ap password
+	EEPROM.put(212, minPulse); // ap password
+
+	// next byte 213
+
+	EEPROM.end();
+}
+
+void sendSettings(uint8_t num){
+	char buffer[128];
+
+	sprintf(buffer, "dAPMode:%i", APConnectMode );
+	webSocket.sendTXT(num, buffer);
+	sprintf(buffer, "dfreq:%i", rxFrequency );
+	webSocket.sendTXT(num, buffer);
+	sprintf(buffer, "dminCal:%i", minCal );
+	webSocket.sendTXT(num, buffer);
+	sprintf(buffer, "dthreshCal:%i", threshCal );
+	webSocket.sendTXT(num, buffer);
+	sprintf(buffer, "dmaxCal:%i", maxCal );
+	webSocket.sendTXT(num, buffer);
+	sprintf(buffer, "dstationSSID:%s", station_SSID );
+	webSocket.sendTXT(num, buffer);
+	sprintf(buffer, "dstationPass:%s", station_password );
+	webSocket.sendTXT(num, buffer);
+	sprintf(buffer, "dAPSSID:%s", AP_SSID );
+	webSocket.sendTXT(num, buffer);
+	sprintf(buffer, "dAPPass:%s", AP_password );
+	webSocket.sendTXT(num, buffer);
+	sprintf(buffer, "dminPulse:%i", minPulse );
+	webSocket.sendTXT(num, buffer);
+}
+
+void sendStatus(uint8_t num){
+	char buffer[128];
+	sprintf(buffer, "dAPstatus:%i", WiFi.status() );
+	webSocket.sendTXT(num, buffer);
+	sprintf(buffer, "dminCal:%i", minCal );
+	webSocket.sendTXT(num, buffer);
+	sprintf(buffer, "dthreshCal:%i", threshCal );
+	webSocket.sendTXT(num, buffer);
+	sprintf(buffer, "dmaxCal:%i", maxCal );
+	webSocket.sendTXT(num, buffer);
+	sprintf(buffer, "dsessionRunning:%i", samplerRunning );
+	webSocket.sendTXT(num, buffer);
+	if (WiFi.status() == WL_CONNECTED) {
+		sprintf(buffer, "dAPIP:%d.%d.%d.%d", WiFi.localIP()[0], WiFi.localIP()[1], WiFi.localIP()[2], WiFi.localIP()[3] );
+		webSocket.sendTXT(num, buffer);
+	}
+}
+
+void loadSettings(){
+	EEPROM.begin(256);
+
+	char headMessage[12] = "";
+	uint8_t settingsVersion = 0;
+
+	for (int i = 0; i < 11; i++){
+		headMessage[i] = EEPROM.read(i);
+	}
+	headMessage[11] = '\0';
+
+	EEPROM.get( 10, settingsVersion );
+	EEPROM.get( 11, APConnectMode );
+	EEPROM.get( 12, rxFrequency );
+	setVTXChannel(rxFrequency);
+
+	EEPROM.get( 14, minCal );
+	EEPROM.get( 16, threshCal );
+	EEPROM.get( 18, maxCal );
+
+	for (int i = 0; i < 32; i++){
+		station_SSID[i] = EEPROM.read(i+20);
+	}
+	station_SSID[32] = '\0';
+	for (int i = 0; i < 64; i++){
+		station_password[i] = EEPROM.read(i+52);
+	}
+	station_password[64] = '\0';
+
+
+	for (int i = 0; i < 32; i++){
+		AP_SSID[i] = EEPROM.read(i+116);
+	}
+	AP_SSID[32] = '\0';
+	for (int i = 0; i < 64; i++){
+		AP_password[i] = EEPROM.read(i+148);
+	}
+	AP_password[64] = '\0';
+
+	EEPROM.get( 212, minPulse );
+	EEPROM.end();
+
+	if (strcmp(headMessage, "Q1Settings")  != 0) {
+		Serial.println("invalid settings EEPROM, resetting");
+		resetSettings();
+		loadSettings();
+		return;
+	}
+
 }
 
 String getContentType(String filename){
@@ -189,17 +361,18 @@ bool handleFileRead(String path){
 
 
 void lapTimerLoop(){
-    if (running){
-    	int val = 0;
+	unsigned long currTime = 0;
 
-    	unsigned long currTime = getLapTime();
-    	if ((currTime - lastSampleTime) > 5) {
+	if (samplerRunning){
+    	currTime = getLapTime();
+    	if ((currTime - lastSampleTime) > 2) {
         	readValue = getRSSI();
         	lastSampleTime = currTime;
     	}
-    	val = readValue;
+    }
 
-    	if (val >= convertRange(threshCal) ){
+    if (sessionRunning){
+    	if (readValue >= convertRange(threshCal) ){
 
     		if (!pulseActive){
     			pulseActive = true;
@@ -271,7 +444,7 @@ void lapTimerLoop(){
     			}
     		}
     		
-    	if (maxLength > 15) {	// if the pulse time was too short just throw it away
+    	if (maxLength > minPulse) {	// if the pulse time was too short just throw it away
 			unsigned long offsetTime = getLapTime();
 			digitalWrite(BLINK_PIN, LOW);
 			digitalWrite(BEEP_PIN, HIGH);
@@ -305,53 +478,45 @@ void lapTimerLoop(){
 		}
 		*/
 
-    		
     	//reset for the next lap	
     	recordedPulsesIndex = 0;
-    		
     	}
-    	
     }
-
 }
 
 void calibrateHigh(){
 	int avg = analogAverage(1000);
 	Serial.print(avg);
 	Serial.println( " high.");
-	maxCal = avg;}
-
+	if (avg <= minCal) avg = minCal + 1;
+	maxCal = avg;
+	saveSettings();
+}
 void calibrateThreshold(){
 	int avg = analogAverage(1000);
 	Serial.print(avg);
 	Serial.println( " thresh.");
 	threshCal = avg;
-	char buffer[7];
-	sprintf(buffer, "b%i", avg);
-	webSocket.sendTXT(0, buffer);
+	saveSettings();
 }
 
 void calibrateLow(){
-	
 	int avg = analogAverage(1000);
 	Serial.print(avg);
 	Serial.println( " low.");
+	if (avg >= minCal) avg = maxCal - 1;
 	minCal = avg;
-
+	saveSettings();
 }
 
 int analogAverage(int samples){
 	long acu = 0;
-	
 	for (int i=0; i<samples; i++){
 		acu = acu + analogRead(A0);
 		delay(0);
 	}
-	
 	int avg = acu / samples;
-	
 	return (avg);
-	
 }
 
 int getRSSI(){
@@ -361,12 +526,10 @@ int getRSSI(){
 	val = map(val, minCal, maxCal, 0, 255);
 	return( val );
 }
-
 int convertRange(int val){
 	val = map(val, minCal, maxCal, 0, 255);
 	return( val );
 }
-
 void sample(){
 	int val = 0;
 
@@ -375,40 +538,28 @@ void sample(){
 	sprintf(buffer, "a%i", val);
 	//itoa(val,buffer,10);
 	webSocket.sendTXT(0, buffer);
-
 }
-
 void sampleTimer(){
-	int val = 0;
-
-	val = readValue;//getRSSI();
-	char buffer[7];
-	sprintf(buffer, "a%i", val);
-	//itoa(val,buffer,10);
-	//webSocket.sendTXT(0, buffer);
-
+	sendSampleFlag = true;
 }
 void start(){
-
-	refresh.attach(0.1, sample);
-	running = true;
-
+	refresh.attach(0.1, sampleTimer);
+	samplerRunning = true;
 }
 void stop(){
 	refresh.detach();
-	running = false;
+	if (!sessionRunning){
+		samplerRunning = false;
+	}
 }
-
 void startSession(){
 	timerReset();
 	lapCount = 0;
 	lastLapTime = 0;
-	running = true;
-
+	samplerRunning = true;
+	sessionRunning = true;
 	blinkFlag = true;
-
 }
-
 void doBlink(){
 	digitalWrite(BLINK_PIN, LOW);
 	digitalWrite(BEEP_PIN, HIGH);
@@ -418,7 +569,6 @@ void doBlink(){
 	delay(250);
 	digitalWrite(BLINK_PIN, LOW);
 	digitalWrite(BEEP_PIN, HIGH);
-
 	delay(250);
 	digitalWrite(BLINK_PIN, HIGH);
 	digitalWrite(BEEP_PIN, LOW);
@@ -429,16 +579,8 @@ void endSession(){
 	timerReset();
 	lapCount = 0;
 	lastLapTime = 0;
-	running = false;
-	/*
-	digitalWrite(BLINK_PIN, HIGH);
-	delay(250);
-	digitalWrite(BLINK_PIN, LOW);
-	delay(250);
-	digitalWrite(BLINK_PIN, HIGH);
-	delay(250);
-	digitalWrite(BLINK_PIN, LOW);
-	*/
+	samplerRunning = false;
+	sessionRunning = false;
 }
 void timerReset(){
 	timerZero = millis();
@@ -482,11 +624,78 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t lenght
 				startSession();
 			}else if (strcmp((char*)payload, "sessionEnd")  == 0) {
 				endSession();
+			}else if (strcmp((char*)payload, "seep")  == 0) {
+				saveSettings();
+			}else if (strcmp((char*)payload, "getSettings")  == 0) {
+					sendSettings(num);
+			}else if (strcmp((char*)payload, "getStatus")  == 0) {
+					sendStatus(num);
+			}else if (strcmp((char*)payload, "reboot")  == 0) {
+				// reboot
+			}else if (strcmp((char*)payload, "vidDwn")  == 0) {
+
 			}else if (strncmp((char*)payload, "sch", 3)  == 0) {
+				// set rx channel
 				char *payloadData = (char*)payload + 3; //get the embedded asci channel
 				uint16_t channel = 0;
 				channel = atoi(payloadData);
-				setVTXChannel(channel);
+				channel = setVTXChannel(channel);
+				rxFrequency=channel;
+				saveSettings();
+			}else if (strncmp((char*)payload, "smp", 3)  == 0) {
+				// set rx channel
+				char *payloadData = (char*)payload + 3;
+				minPulse = atoi(payloadData);
+				saveSettings();
+			}else if (strncmp((char*)payload, "apc", 3)  == 0) {
+				// connect to AP
+			}else if (strncmp((char*)payload, "apdc", 4)  == 0) {
+				// disconnect from AP
+			}else if (strncmp((char*)payload, "sapn", 4)  == 0) {
+				// set the AP name
+				char *payloadData = (char*)payload + 4;
+				if ( strlen(payloadData) > 32) {
+					//error case
+					return;
+				}
+				strcpy( AP_SSID, payloadData);
+				saveSettings();
+			}else if (strncmp((char*)payload, "sapp", 4)  == 0) {
+				// set the AP password
+				char *payloadData = (char*)payload + 4;
+				if ( strlen(payloadData) > 64) {
+					//error case
+					return;
+				}
+				strcpy( AP_password, payloadData);
+				saveSettings();
+			}else if (strncmp((char*)payload, "sapm", 4)  == 0) {
+				// set the AP mode
+				char *payloadData = (char*)payload + 4;
+				int mode = 0;
+				mode = atoi(payloadData);
+				APConnectMode = mode;
+				Serial.print("set mode ");
+				Serial.println(mode);
+				saveSettings();
+			}else if (strncmp((char*)payload, "sstn", 4)  == 0) {
+				// set the station password
+				char *payloadData = (char*)payload + 4;
+				if ( strlen(payloadData) > 32) {
+					//error case
+					return;
+				}
+				strcpy( station_SSID, payloadData);
+				saveSettings();
+			}else if (strncmp((char*)payload, "sstp", 4)  == 0) {
+				// set the station password
+					char *payloadData = (char*)payload + 4;
+					if ( strlen(payloadData) > 64) {
+						//error case
+						return;
+					}
+					strcpy( station_password, payloadData);
+					saveSettings();
 			} else {
 				webSocket.sendTXT(0, "pong");
 			}
@@ -509,13 +718,15 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t lenght
 }
 
 
-void setVTXChannel(uint16_t channel)
+uint16_t setVTXChannel(uint16_t channel)
 {
 	if (channel > 5950) channel = 5950;
 	if (channel < 5630) channel = 5630;
+
 	uint32_t registerValue = 0;
 	registerValue = getChannelValueFromFreq(channel);
 	vtxWrite(0x1, registerValue);
+	return(channel);
 }
 
 uint32_t getChannelValueFromFreq(uint16_t frequency){

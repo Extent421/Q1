@@ -4,6 +4,8 @@ var rawLog = "a";
 var overallBest = 999;
 var sessionBest = 999;
 var sessionNumber = 1;
+var doConnect = false;
+
 function logTime(msg) {
 	rawLog = rawLog + msg + '\n';
 
@@ -57,6 +59,7 @@ function status(msg) {
 }
 
    function connect() {
+   doConnect = true;
      var host = location.hostname;
      if (host == "") { host =  "10.0.2.128" };
 
@@ -81,6 +84,7 @@ function status(msg) {
        status('Disconnected.');
 	   document.getElementById('connectButton').innerHTML = "Connect";
 	   document.getElementById('connectButton').onclick = connect;
+	   if (doConnect) setTimeout(connect, 1000);
 
      };
    }
@@ -137,6 +141,7 @@ function status(msg) {
 		localStorage.setItem("defaultVoice",document.getElementById("voiceOption").value);
    } 
    function disconnect() {
+	   doConnect = false;
      if (socket) {
        status('Disconnecting.');
        socket.close();
@@ -189,6 +194,11 @@ function status(msg) {
 	        socket.send('sessionEnd');
 	    }
 	}
+	function sendRestart() {
+	    if (socket) {
+	        socket.send('reboot');
+	    }
+	}	
 	function getSettings() {
 	    if (socket) {
 	    	socket.send('getSettings' );
@@ -291,6 +301,7 @@ function status(msg) {
 				document.getElementById('midCalibrateValue').textContent = dSplit[1];
 				break;
 			case "sessionRunning":
+				console.log(data);
 				if ( dSplit[1] == "1" ) {
 					document.getElementById('sessionValue').textContent = "Running";
 				} else {

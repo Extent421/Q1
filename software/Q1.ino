@@ -267,7 +267,7 @@ void sendStatus(uint8_t num){
 	webSocket.sendTXT(num, buffer);
 	sprintf(buffer, "dmaxCal:%i", maxCal );
 	webSocket.sendTXT(num, buffer);
-	sprintf(buffer, "dsessionRunning:%i", samplerRunning );
+	sprintf(buffer, "dsessionRunning:%i", sessionRunning );
 	webSocket.sendTXT(num, buffer);
 	if (WiFi.status() == WL_CONNECTED) {
 		sprintf(buffer, "dAPIP:%d.%d.%d.%d", WiFi.localIP()[0], WiFi.localIP()[1], WiFi.localIP()[2], WiFi.localIP()[3] );
@@ -631,6 +631,7 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t lenght
 			}else if (strcmp((char*)payload, "getStatus")  == 0) {
 					sendStatus(num);
 			}else if (strcmp((char*)payload, "reboot")  == 0) {
+				ESP.restart();
 				// reboot
 			}else if (strcmp((char*)payload, "vidDwn")  == 0) {
 
@@ -643,7 +644,6 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t lenght
 				rxFrequency=channel;
 				saveSettings();
 			}else if (strncmp((char*)payload, "smp", 3)  == 0) {
-				// set rx channel
 				char *payloadData = (char*)payload + 3;
 				minPulse = atoi(payloadData);
 				saveSettings();

@@ -1,9 +1,7 @@
 #include "Q1.h"
 #include "pins.h"
 
-extern "C" {
-#include "driver/spi.h"
-}
+#include "spi.h"
 
 #include <ESP8266WiFi.h>
 #include <ESP8266WebServer.h>
